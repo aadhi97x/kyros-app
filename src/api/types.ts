@@ -91,9 +91,23 @@ export interface ConsentScreenData {
 export interface VerificationStart {
   method: 'DIGILOCKER' | 'MOCK' | 'MANUAL_OFFLINE';
   requestId: string;
+  /**
+   * True for DigiLocker: the parent leaves for the provider and returns via a
+   * `kyros://consent-callback` deep link once the server has finished the token
+   * exchange. False for mock and manual-offline, which complete in-app.
+   */
+  isRedirectFlow: boolean;
   redirectUrl: string | null;
   instruction: string | null;
   expiresAt: string;
+}
+
+export interface VerificationComplete {
+  requestId: string;
+  verified: boolean;
+  method: string;
+  verifiedAt: string;
+  note: string | null;
 }
 
 // ---------------------------------------------------------------------------

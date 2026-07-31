@@ -6,7 +6,7 @@ import { api } from '@/api/client';
 import type { CoachSession } from '@/api/types';
 import { flush, pendingCount } from '@/offline/attendance-queue';
 import { Badge, Card, EmptyState, ErrorState, Loading, OfflineBanner } from '@/ui/components';
-import { colors, s, spacing } from '@/ui/theme';
+import { colors, s } from '@/ui/theme';
 
 /**
  * Coach landing screen (spec 4.1): today's batches and timings at a glance.

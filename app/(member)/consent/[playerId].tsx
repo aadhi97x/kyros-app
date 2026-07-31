@@ -1,10 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
-import type { ConsentScreenData, VerificationStart } from '@/api/types';
+import type {
+  ConsentScreenData,
+  VerificationComplete,
+  VerificationStart,
+} from '@/api/types';
 import { Button, Card, ErrorState, Loading } from '@/ui/components';
 import { colors, s, spacing } from '@/ui/theme';
 
@@ -15,8 +20,14 @@ import { colors, s, spacing } from '@/ui/theme';
  *    what is collected and why — never one "I agree to everything" box.
  *  - Required purposes (without which the service cannot run) are marked and
  *    fixed on; optional ones are genuinely declinable switches.
- *  - Identity verification happens BEFORE the grant is recorded, and the grant
- *    quotes the verification's requestId.
+ *  - Identity verification completes BEFORE the grant is recorded, and the
+ *    grant quotes the verification's requestId, which the server proves it
+ *    issued and then burns.
+ *
+ * Two verification shapes are handled. DigiLocker is a redirect: the parent
+ * leaves for the provider, the SERVER does the token exchange (the client
+ * secret must never be in this bundle), and we come back on a deep link.
+ * Mock and manual-offline complete in-app with a PUT.
  */
 export default function ConsentScreen() {
   const { playerId } = useLocalSearchParams<{ playerId: string }>();
@@ -24,6 +35,7 @@ export default function ConsentScreen() {
 
   const [optionalChoices, setOptionalChoices] = useState<Record<string, boolean>>({});
   const [verification, setVerification] = useState<VerificationStart | null>(null);
+  const [verified, setVerified] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const screen = useQuery({
@@ -31,16 +43,57 @@ export default function ConsentScreen() {
     queryFn: () => api.get<ConsentScreenData>(`/api/v1/players/${playerId}/consent`),
   });
 
+  // The DigiLocker round trip ends at kyros://consent-callback. Catch it and
+  // read the outcome the server determined — the app is told what happened,
+  // never asked to decide it.
+  useEffect(() => {
+    const handle = (url: string) => {
+      const parsed = Linking.parse(url);
+      if (!parsed.path?.includes('consent-callback')) return;
+
+      const status = parsed.queryParams?.status;
+      const requestId = parsed.queryParams?.requestId;
+
+      if (status === 'verified' && typeof requestId === 'string') {
+        setVerified(true);
+        setError(null);
+        setVerification((previous) => (previous ? { ...previous, requestId } : previous));
+      } else if (status === 'cancelled') {
+        setError('Verification was cancelled.');
+      } else {
+        const reason = parsed.queryParams?.reason;
+        setError(typeof reason === 'string' ? reason : 'Verification failed.');
+      }
+    };
+
+    const subscription = Linking.addEventListener('url', (event) => handle(event.url));
+    void Linking.getInitialURL().then((url) => url && handle(url));
+
+    return () => subscription.remove();
+  }, []);
+
   const startVerification = useMutation({
-    mutationFn: () =>
-      api.post<VerificationStart>(`/api/v1/players/${playerId}/consent/verify`, {}),
+    mutationFn: () => api.post<VerificationStart>(`/api/v1/players/${playerId}/consent/verify`, {}),
     onSuccess: async (start) => {
       setVerification(start);
       setError(null);
-      // DigiLocker is a browser redirect; the mock and offline verifiers are
-      // completed in-app.
-      if (start.redirectUrl) {
-        await WebBrowser.openBrowserAsync(start.redirectUrl);
+
+      if (start.isRedirectFlow && start.redirectUrl) {
+        // The browser session closes itself on the deep-link redirect; the
+        // listener above picks up the outcome.
+        await WebBrowser.openAuthSessionAsync(start.redirectUrl, 'kyros://consent-callback');
+        return;
+      }
+
+      // Non-redirect verifiers finish here.
+      try {
+        await api.put<VerificationComplete>(`/api/v1/players/${playerId}/consent/verify`, {
+          requestId: start.requestId,
+          payload: start.method === 'MOCK' ? { confirm: true } : {},
+        });
+        setVerified(true);
+      } catch (caught) {
+        setError(caught instanceof ApiError ? caught.message : 'Verification failed.');
       }
     },
     onError: (caught) =>
@@ -49,7 +102,7 @@ export default function ConsentScreen() {
 
   const grant = useMutation({
     mutationFn: () => {
-      if (!verification || !screen.data) throw new Error('Verification has not been started.');
+      if (!verification || !screen.data) throw new Error('Verification has not been completed.');
 
       const scopes = [
         ...screen.data.purposes.filter((purpose) => purpose.required).map((purpose) => purpose.scope),
@@ -60,13 +113,7 @@ export default function ConsentScreen() {
 
       return api.post(`/api/v1/players/${playerId}/consent`, {
         scopes,
-        verification: {
-          method: verification.method,
-          requestId: verification.requestId,
-          // The mock verifier needs an explicit confirmation payload; a real
-          // DigiLocker completion carries the OAuth code from the redirect.
-          payload: verification.method === 'MOCK' ? { confirm: true } : {},
-        },
+        verificationRequestId: verification.requestId,
       });
     },
     onSuccess: async () => {
@@ -138,16 +185,21 @@ export default function ConsentScreen() {
           reference that verification happened — never your documents.
         </Text>
 
-        {!verification ? (
-          <Button
-            label="Verify identity"
-            onPress={() => startVerification.mutate()}
-            loading={startVerification.isPending}
-          />
-        ) : (
-          <Text style={{ color: colors.accent, fontSize: 14 }}>
-            {verification.instruction ?? 'Verification started — complete it, then agree below.'}
+        {verified ? (
+          <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '600' }}>
+            ✓ Identity verified
           </Text>
+        ) : (
+          <>
+            <Button
+              label={verification ? 'Try verification again' : 'Verify identity'}
+              onPress={() => startVerification.mutate()}
+              loading={startVerification.isPending}
+            />
+            {verification?.instruction && (
+              <Text style={s.muted}>{verification.instruction}</Text>
+            )}
+          </>
         )}
       </Card>
 
@@ -157,8 +209,13 @@ export default function ConsentScreen() {
         label="I agree to the selected purposes"
         onPress={() => grant.mutate()}
         loading={grant.isPending}
-        disabled={!verification}
+        disabled={!verified}
       />
+      {!verified && (
+        <Text style={[s.muted, { textAlign: 'center' }]}>
+          Verify your identity above before agreeing.
+        </Text>
+      )}
 
       <Pressable onPress={() => router.back()}>
         <Text style={{ color: colors.textMuted, textAlign: 'center', padding: spacing.md }}>

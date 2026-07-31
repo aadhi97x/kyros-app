@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
@@ -50,16 +50,28 @@ export default function SessionScreen() {
     staleTime: 5 * 60_000,
   });
 
-  const reloadQueueState = useCallback(async () => {
-    if (!sessionId) return;
-    setLocal(await pendingForSession(sessionId));
-    const { remaining } = await flush().catch(() => ({ remaining: 0 }));
-    setPendingTotal(remaining);
-  }, [sessionId]);
-
+  // Load whatever this device already has queued for the session, then try to
+  // drain it. The cancellation guard matters: a coach opening a session and
+  // immediately backing out would otherwise set state on an unmounted screen
+  // when the flush eventually resolves.
   useEffect(() => {
-    void reloadQueueState();
-  }, [reloadQueueState]);
+    if (!sessionId) return;
+    let cancelled = false;
+
+    (async () => {
+      const queued = await pendingForSession(sessionId);
+      if (cancelled) return;
+      setLocal(queued);
+
+      const { remaining } = await flush().catch(() => ({ remaining: 0 }));
+      if (cancelled) return;
+      setPendingTotal(remaining);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
 
   const mark = async (playerProfileId: string, status: AttendanceMark) => {
     if (!sessionId) return;

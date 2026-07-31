@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npx eslint .
+
+      - run: npm test
+
+  # Guards against a secret or a signing identity reaching the history. Cheap,
+  # and the alternative is revoking credentials under pressure.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for committed secrets
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example'; then
+            echo "::error::A .env file is tracked by git. Remove it and rotate every secret it contained."
+            exit 1
+          fi
+          if git ls-files | grep -E 'credentials\.json|google-services\.json|GoogleService-Info\.plist|\.(jks|keystore|p8|p12|mobileprovision)$'; then
+            echo "::error::A signing identity or service credential is tracked by git. Remove it and rotate it."
+            exit 1
+          fi
+
+      # EXPO_PUBLIC_* values are inlined into the JS bundle and readable by
+      # anyone with the APK. A secret-looking name in that namespace is a leak.
+      - name: Check for secrets in the public env namespace
+        run: |
+          if grep -rEn 'EXPO_PUBLIC_[A-Z_]*(SECRET|PRIVATE|PASSWORD|TOKEN)' --include='*.ts' --include='*.tsx' --include='*.json' . ; then
+            echo "::error::EXPO_PUBLIC_* is inlined into the bundle. Never put a secret there."
+            exit 1
+          fi
