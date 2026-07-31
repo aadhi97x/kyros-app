@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "Kyros",
+    "slug": "kyros-app",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "kyros",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.kyros.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Kyros checks that coaches are at the training centre when they check in, and shows you clubs near you.",
+        "NSCameraUsageDescription": "Add a photo to a player profile.",
+        "NSPhotoLibraryUsageDescription": "Choose a photo for a player profile."
+      }
+    },
+    "android": {
+      "package": "in.kyros.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0f172a"
+      },
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Kyros confirms coaches are at the centre when they check in."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {}
+    }
+  }
+}
